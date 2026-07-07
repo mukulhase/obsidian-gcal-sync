@@ -957,4 +957,38 @@ export default class GoogleCalendarSyncPlugin extends Plugin {
             resolve(confirm);
         });
     }
+
+    private _externalSettingsReloadActive = false;
+
+    /**
+     * Fired by Obsidian when data.json is modified on disk by an external
+     * process (e.g. a companion tool seeding fresh OAuth tokens, or a sync
+     * client updating settings). Reloads settings and re-runs
+     * loadSavedTokens() so the change takes effect without reloading
+     * Obsidian.
+     */
+    async onExternalSettingsChange() {
+        if (this._externalSettingsReloadActive) {
+            return;
+        }
+        this._externalSettingsReloadActive = true;
+        try {
+            console.log('External change to data.json detected, reloading settings and tokens');
+            await this.loadSettings();
+            if (!this.authManager) {
+                return;
+            }
+            const loaded = await this.authManager.loadSavedTokens();
+            const isAuthenticated = this.authManager.isAuthenticated();
+            useStore.getState().setAuthenticated(isAuthenticated);
+            useStore.getState().setStatus(isAuthenticated ? 'connected' : 'disconnected');
+            if (loaded && isAuthenticated && !this.calendarSync) {
+                await this.initializeCalendarSync();
+            }
+        } catch (error) {
+            console.error('Failed to reload settings after external change:', error);
+        } finally {
+            this._externalSettingsReloadActive = false;
+        }
+    }
 }    
