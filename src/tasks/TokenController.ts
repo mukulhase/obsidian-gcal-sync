@@ -242,6 +242,31 @@ export class TokenController {
         const doc = view.state.doc
         const changes: { from: number, to: number, insert: string }[] = []
 
+        // A task-id must identify exactly one task. When the Tasks plugin
+        // completes a recurring task it clones the line for the next
+        // occurrence, so the same ID briefly exists on two lines and both
+        // would sync to the same calendar event. Keep the ID on the completed
+        // line (its event is the one that happened) and strip it from the
+        // copies so a fresh ID gets stamped on the new occurrence.
+        const idToLines = new Map<string, number[]>()
+        for (let i = 1; i <= doc.lines; i++) {
+            const line = doc.line(i)
+            const idMatch = line.text.match(/<!-- task-id: ([a-z0-9]+) -->/)
+            if (idMatch && line.text.match(/^.*?- \[[ xX]\].*/)) {
+                if (!idToLines.has(idMatch[1])) idToLines.set(idMatch[1], [])
+                idToLines.get(idMatch[1])!.push(i)
+            }
+        }
+        const duplicateIdLines = new Set<number>()
+        for (const lineNos of idToLines.values()) {
+            if (lineNos.length < 2) continue
+            const checked = lineNos.filter(n => doc.line(n).text.match(/^\s*- \[[xX]\]/))
+            const keep = checked.length > 0 ? checked[0] : lineNos[0]
+            for (const n of lineNos) {
+                if (n !== keep) duplicateIdLines.add(n)
+            }
+        }
+
         for (let i = 1; i <= doc.lines; i++) {
             const line = doc.line(i)
             // Look for tasks with task IDs
@@ -292,8 +317,15 @@ export class TokenController {
                 let needsUpdate = false
                 let newLine = line.text
 
-                // Handle IDs first - ensure they're at the end
-                if (taskIdMatches.length > 0) {
+                // Handle duplicated IDs first - a recurrence copy must lose
+                // its inherited ID so it gets stamped with a fresh one
+                if (duplicateIdLines.has(i)) {
+                    LogUtils.debug(`Stripping duplicated task ID from line ${i} (recurrence copy): ${line.text}`)
+                    newLine = newLine.replace(this.ID_PATTERN, '').replace(/\s+$/, '')
+                    needsUpdate = true
+                }
+                // Handle IDs next - ensure they're at the end
+                else if (taskIdMatches.length > 0) {
                     // Check if there are multiple IDs (the issue)
                     if (taskIdMatches.length > 1) {
                         LogUtils.debug(`Found multiple task IDs in line: ${line.text}`)
@@ -347,8 +379,9 @@ export class TokenController {
                     if (hasCompletionMarkers) {
                         LogUtils.debug(`Found unticked task with completion markers during ID check: ${line.text}`)
 
-                        // Get the current ID
-                        const taskId = taskIdMatches.length > 0 ? taskIdMatches[0][1] : null
+                        // Get the current ID (not if this line is losing its
+                        // duplicated ID - it must not be re-added)
+                        const taskId = !duplicateIdLines.has(i) && taskIdMatches.length > 0 ? taskIdMatches[0][1] : null
 
                         // Create a new line without completion markers
                         newLine = newLine.replace(this.COMPLETION_PATTERN, '')
