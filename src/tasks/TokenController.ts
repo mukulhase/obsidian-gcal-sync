@@ -109,7 +109,41 @@ export class TokenController {
     }
 
     /**
-     * Handles task completion status changes, specifically handling the cleanup 
+     * Index of the first Tasks-plugin emoji field marker (dates, recurrence,
+     * priority, id, dependsOn, onCompletion) in a line, or -1 if none.
+     * The Tasks plugin parses these fields from the END of the line and stops at
+     * the first token it doesn't recognise, so the task-id comment must sit
+     * BEFORE all of them — a trailing comment makes Tasks see no due date or
+     * recurrence rule at all (recurring tasks then silently fail to recur).
+     */
+    private findTasksMetadataStart(text: string): number {
+        const match = text.match(/[📅⏳⌛🛫➕✅❌🔁🔺⏫🔼🔽⏬🆔⛔🏁]/u)
+        return match && match.index !== undefined ? match.index : -1
+    }
+
+    /**
+     * Removes all task-id comments from a line, tidying the space they leave.
+     * Preserves leading indentation (nested tasks).
+     */
+    private stripTaskIds(text: string): string {
+        return text.replace(/\s*<!--\s*task-id:\s*[a-z0-9]+\s*-->/g, '').replace(/\s+$/, '')
+    }
+
+    /**
+     * Inserts a task-id comment just before the Tasks emoji metadata, or at the
+     * end of the line when the task has no emoji metadata.
+     */
+    public placeTaskId(text: string, taskIdText: string): string {
+        const base = text.replace(/\s+$/, '')
+        const idx = this.findTasksMetadataStart(base)
+        if (idx === -1) {
+            return base + ' ' + taskIdText
+        }
+        return base.slice(0, idx).replace(/\s+$/, '') + ' ' + taskIdText + ' ' + base.slice(idx)
+    }
+
+    /**
+     * Handles task completion status changes, specifically handling the cleanup
      * of completion markers when a task is unticked
      */
     private handleTaskCompletionChanges(editor: Editor) {
@@ -161,9 +195,9 @@ export class TokenController {
                             newLine = newLine.replace(checkboxMatch[0], checkboxMatch[0] + `${reminderText} `)
                         }
 
-                        // Add ID at the end
+                        // Add ID back (before any Tasks emoji metadata)
                         if (taskId) {
-                            newLine = newLine + ` <!-- task-id: ${taskId} -->`
+                            newLine = this.placeTaskId(newLine, `<!-- task-id: ${taskId} -->`)
                         }
                     }
 
@@ -230,7 +264,7 @@ export class TokenController {
                         changes.push({
                             from: prevLine.from,
                             to: prevLine.to,
-                            insert: prevLine.text.trim() + ' ' + taskId
+                            insert: this.placeTaskId(prevLine.text, taskId)
                         })
                         
                         // Remove the ID from current line
@@ -264,33 +298,19 @@ export class TokenController {
                     if (taskIdMatches.length > 1) {
                         LogUtils.debug(`Found multiple task IDs in line: ${line.text}`)
 
-                        // Keep only the first ID
+                        // Keep only the first ID, re-placed before Tasks metadata
                         const firstId = taskIdMatches[0][0]
-                        // Remove all IDs from the line
-                        newLine = newLine.replace(this.ID_PATTERN, '')
-                        // Clean up any extra whitespace
-                        newLine = newLine.replace(/\s+/g, ' ').trim()
-
-                        // Add the ID at the end of the line
-                        newLine = newLine + ' ' + firstId
+                        newLine = this.placeTaskId(this.stripTaskIds(newLine), firstId)
                         needsUpdate = true
                     }
-                    // If ID exists but is not at the end of the line
+                    // If ID exists but is not in its canonical position
                     else {
                         const idMatch = taskIdMatches[0]
                         const idText = idMatch[0]
-                        
-                        // Check if ID is already at the end (with optional whitespace)
-                        const isAtEnd = newLine.trim().endsWith(idText.trim())
-                        
-                        if (!isAtEnd) {
-                            // Remove the ID from its current position
-                            newLine = newLine.replace(idText, '')
-                            // Clean up any extra whitespace
-                            newLine = newLine.replace(/\s+/g, ' ').trim()
 
-                            // Add the ID at the end of the line
-                            newLine = newLine + ' ' + idText
+                        const placed = this.placeTaskId(this.stripTaskIds(newLine), idText)
+                        if (placed !== newLine) {
+                            newLine = placed
                             needsUpdate = true
                         }
                     }
@@ -338,10 +358,9 @@ export class TokenController {
                         // Remove the ID temporarily
                         newLine = newLine.replace(this.ID_PATTERN, '').trim()
 
-                        // Add the ID back at the end
+                        // Add the ID back (before any Tasks emoji metadata)
                         if (taskId) {
-                            const taskIdText = `<!-- task-id: ${taskId} -->`
-                            newLine = newLine + ' ' + taskIdText
+                            newLine = this.placeTaskId(newLine, `<!-- task-id: ${taskId} -->`)
                         }
 
                         LogUtils.debug(`Cleaning up completion markers in unticked task during ID check: ${taskId}`)
@@ -470,8 +489,8 @@ export class TokenController {
                                     cleanedLine = cleanedLine.replace(checkboxMatch[0], checkboxMatch[0] + reminderText + ' ');
                                 }
 
-                                // Add ID at the end
-                                cleanedLine = cleanedLine + ' ' + taskIdMatch[0];
+                                // Add ID back (before any Tasks emoji metadata)
+                                cleanedLine = controller.placeTaskId(cleanedLine, taskIdMatch[0]);
                             }
 
                             LogUtils.debug(`Original line: ${newLineText}`);
@@ -789,18 +808,15 @@ export class TokenController {
             // Create the task ID
             const taskId = `<!-- task-id: ${id} -->`;
 
-            // Insert the ID at the end of the line
-            // This helps with tag parsing and general readability
+            // Insert the ID before any Tasks emoji metadata (or at the end of
+            // the line when there is none) so the Tasks plugin still parses
+            // its fields correctly
             let transaction;
 
-            // Find the end of the line
-            const insertPos = line.to;
-
-            // Insert the ID at the end of the task line
             const changes = [{
-                from: insertPos,
-                to: insertPos,
-                insert: ` ${taskId}`
+                from: line.from,
+                to: line.to,
+                insert: this.placeTaskId(line.text, taskId)
             }];
 
             transaction = view.state.update({ changes });
