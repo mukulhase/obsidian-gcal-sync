@@ -786,6 +786,14 @@ export class TokenController {
                 return '';
             }
 
+            // Only stamp tasks the calendar sync can actually use - without a
+            // due date there is nothing to schedule, and stamping every
+            // checkbox in the vault litters non-task lists with IDs
+            if (!/📅\s*\d{4}-\d{2}-\d{2}/u.test(line.text)) {
+                LogUtils.debug('Checkbox has no due date, skipping ID stamp');
+                return '';
+            }
+
             // Create the task ID
             const taskId = `<!-- task-id: ${id} -->`;
 
