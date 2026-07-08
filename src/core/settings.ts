@@ -9,6 +9,7 @@ export const DEFAULT_SETTINGS: GoogleCalendarSettings = {
     clientSecret: '',
     oauth2Tokens: undefined,
     syncEnabled: true,
+    calendarId: 'primary',
     defaultReminder: 30,
     includeFolders: [],  // Empty by default to scan all folders
     taskMetadata: {},
@@ -65,6 +66,18 @@ export class GoogleCalendarSettingsTab extends PluginSettingTab {
 
         // Calendar Settings Section
         containerEl.createEl('h3', { text: 'Calendar Settings' });
+
+        new Setting(containerEl)
+            .setName('Calendar ID')
+            .setDesc('The Google Calendar to sync with. Use "primary" for your main calendar, or enter a specific calendar ID (found in calendar settings \u2192 "Integrate calendar")')
+            .addText(text => text
+                .setPlaceholder('primary')
+                .setValue(this.plugin.settings.calendarId || 'primary')
+                .onChange(async (value) => {
+                    this.plugin.settings.calendarId = value.trim() || 'primary';
+                    await this.plugin.saveSettings();
+                    new Notice(`Calendar ID updated to: ${this.plugin.settings.calendarId}`);
+                }));
 
         new Setting(containerEl)
             .setName('Default Reminder')
